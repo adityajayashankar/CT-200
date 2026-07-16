@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
 from sqlalchemy import or_, select
 
 from app.db import make_session_factory
-from app.generation_store import JsonGenerationStore
+from app.generation_store import (
+    GenerationStore,
+    MongoConfigurationError,
+    MongoGenerationStore,
+    UnconfiguredMongoGenerationStore,
+)
 from app.ingestion import ingest_pdf
 from app.llm import OpenAICompatibleClient
 from app.models import Node, Selection
@@ -33,10 +39,24 @@ from app.services import (
 )
 
 
-def create_app(database_url: str = "sqlite:///./ct200.db", output_path: str = "generated_output.json", llm_client=None) -> FastAPI:
-    app = FastAPI(title="CT-200 Document Intelligence API", version="1.0.0")
+def create_app(
+    database_url: str = "sqlite:///./ct200.db",
+    llm_client=None,
+    generation_store: GenerationStore | None = None,
+) -> FastAPI:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        app.state.store.ensure_ready()
+        yield
+
+    app = FastAPI(title="CT-200 Document Intelligence API", version="1.0.0", lifespan=lifespan)
     app.state.Session = make_session_factory(database_url)
-    app.state.store = JsonGenerationStore(output_path)
+    if generation_store is None:
+        try:
+            generation_store = MongoGenerationStore.from_environment()
+        except MongoConfigurationError as exc:
+            generation_store = UnconfiguredMongoGenerationStore(exc)
+    app.state.store = generation_store
     app.state.llm_client = llm_client or OpenAICompatibleClient()
 
     @app.post("/documents/{document_name}/ingest", response_model=IngestResponse)

@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Protocol
 
 import httpx
+from dotenv import load_dotenv
+
+
+# Load local development credentials without overriding explicitly exported
+# environment variables (which take precedence in deployment environments).
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 
 class LLMClient(Protocol):

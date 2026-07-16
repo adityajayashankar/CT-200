@@ -12,6 +12,7 @@ if str(ROOT) not in sys.path:
 
 from fastapi.testclient import TestClient
 
+from app.generation_store import InMemoryGenerationStore
 from app.main import create_app
 
 
@@ -37,7 +38,11 @@ class DemoLLM:
 
 def main() -> None:
     with tempfile.TemporaryDirectory() as temporary:
-        app = create_app(f"sqlite:///{Path(temporary) / 'demo.db'}", str(Path(temporary) / "output.json"), DemoLLM())
+        app = create_app(
+            f"sqlite:///{Path(temporary) / 'demo.db'}",
+            llm_client=DemoLLM(),
+            generation_store=InMemoryGenerationStore(),
+        )
         client = TestClient(app)
         print("Ingest v1:", client.post("/documents/ct200/ingest", json={"source_path": str(ROOT / "data/ct200_manual.pdf")}).json())
         inflation = next(

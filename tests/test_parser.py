@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from app.parser import parse_ct200_pdf
+from app import parser
+from app.parser import OCRLine, parse_ct200_pdf
 
 
 PDF = Path("data/ct200_manual.pdf")
@@ -53,3 +54,23 @@ def test_numbered_classification_entries_are_a_structured_list_block():
     assert list_block.items and len(list_block.items) == 5
     assert list_block.items[0].startswith("1. Normal:")
     assert list_block.items[-1].endswith("recommends seeking immediate medical attention")
+
+
+def test_ocr_heading_rule_does_not_turn_numbered_classification_list_into_sections():
+    assert parser._ocr_heading("1. Normal: below 120/80 mmHg", 12, 10) is None
+    assert parser._ocr_heading("3.2 Cuff Inflation Sequence", 10, 10) == ("3.2", "Cuff Inflation Sequence", 2)
+
+
+def test_forced_ocr_mode_uses_positioned_ocr_lines(monkeypatch):
+    class FakeOCR:
+        def __init__(self, path):
+            self.path = path
+
+        def line_records(self, page_number):
+            return [OCRLine(10, "1 Overview", 14), OCRLine(30, "OCR extracted body text.", 10)] if page_number == 0 else []
+
+    monkeypatch.setattr(parser, "TesseractOCR", FakeOCR)
+    parsed = parse_ct200_pdf(PDF, extraction_mode="ocr")
+    overview = next(node for node in parsed.flatten() if node.number == "1")
+    assert overview.heading == "Overview"
+    assert "OCR extracted body text." in overview.body_text

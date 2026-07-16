@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from app.generation_store import InMemoryGenerationStore
 from app.main import create_app
 
 
@@ -45,7 +46,13 @@ class BrokenLLM:
 
 
 def make_client(tmp_path, llm):
-    return TestClient(create_app(f"sqlite:///{tmp_path / 'test.db'}", str(tmp_path / "output.json"), llm))
+    return TestClient(
+        create_app(
+            f"sqlite:///{tmp_path / 'test.db'}",
+            llm_client=llm,
+            generation_store=InMemoryGenerationStore(),
+        )
+    )
 
 
 def test_browse_selection_generation_and_staleness_flow(tmp_path):

@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.generation_store import JsonGenerationStore
+from app.generation_store import GenerationStore
 from app.llm import LLMClient
 from app.models import Document, DocumentVersion, Node, Selection, SelectionItem
 from app.schemas import GenerationPayload, GenerationResponse, TestCaseIdea
@@ -170,7 +170,7 @@ def generation_response(session: Session, record: dict, *, idempotent: bool = Fa
 
 def generate(
     session: Session,
-    store: JsonGenerationStore,
+    store: GenerationStore,
     client: LLMClient,
     selection: Selection,
     force_regenerate: bool,

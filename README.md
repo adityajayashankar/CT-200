@@ -22,16 +22,51 @@ uvicorn app.main:app --reload
 
 Open `http://127.0.0.1:8000/docs` to exercise the API.
 
+### OCR for scanned PDFs
+
+The parser automatically uses embedded PDF text for born-digital pages and
+uses Tesseract OCR when a page has no text layer. Install Tesseract and
+Poppler (the PDF-to-image renderer) before ingesting scanned/image-only PDFs:
+
+```powershell
+winget install -e --id UB-Mannheim.TesseractOCR
+winget install -e --id oschwartz10612.Poppler
+```
+
+Restart PowerShell after installation so `tesseract` is on `PATH`. The
+application fails with a clear setup error rather than silently returning an
+empty document if OCR is required but unavailable.
+
+### MongoDB generation storage
+
+Generated QA results are stored in MongoDB, not in a local JSON file. Before
+starting the API, create a MongoDB Atlas cluster and database user, then add
+the cluster host to `.env`:
+
+```env
+MONGODB_HOST=cluster-name.xxxxx.mongodb.net
+MONGODB_DATABASE=ct200
+```
+
+The username and password remain in `.env`; do not add them to `.env.example`
+or commit them. In Atlas, add your current public IP address to **Network
+Access**. You can alternatively set one complete `MONGODB_URI` in `.env`.
+The application verifies its MongoDB connection and creates retrieval indexes
+at startup.
+
 ## LLM configuration
 
 Generation uses an OpenAI-compatible chat-completions endpoint. Groq,
 OpenRouter, or another compatible provider can be used:
 
 ```powershell
-$env:LLM_API_KEY = "your-provider-key"
-$env:LLM_MODEL = "your-model-name"
-$env:LLM_BASE_URL = "https://api.groq.com/openai/v1" # optional; this is the default
+Copy-Item .env.example .env
 ```
+
+Then edit `.env` and set `LLM_API_KEY` and `LLM_MODEL`. The application loads
+that file automatically; `.env` is ignored by Git. `LLM_BASE_URL` is optional
+and defaults to Groq's `https://api.groq.com/openai/v1`. You can still use
+exported environment variables when preferred; they override `.env` values.
 
 Without an API key/model, a generation request is recorded as
 `generation_failed` with the configuration error preserved; it is not silently
@@ -61,6 +96,13 @@ python scripts/demo_flow.py
 
 It injects a deterministic test LLM only for the demo; production requests
 use the configured provider.
+
+After configuring a real provider, run this optional live smoke test (it makes
+one paid/free-tier provider request and expects a valid completed generation):
+
+```powershell
+python scripts/smoke_real_llm.py
+```
 
 ## Key endpoints
 

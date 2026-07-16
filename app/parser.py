@@ -1,14 +1,15 @@
-"""A deliberately CT-200-specific PDF hierarchy parser.
-
-The manual is born-digital.  We use pdfplumber here because this execution
-environment blocks the PyMuPDF native extension under Application Control.
-"""
+"""A deliberately CT-200-specific PDF hierarchy parser with OCR fallback."""
 
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
+import tempfile
+from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
+from statistics import median
 from typing import Literal
 
 import pdfplumber
@@ -16,6 +17,108 @@ import pdfplumber
 
 HEADING_RE = re.compile(r"^(?P<number>\d+(?:\.\d+)*\.?)\s+(?P<title>.+)$")
 LIST_ITEM_RE = re.compile(r"^\d+\.\s+.+$")
+ExtractionMode = Literal["auto", "native", "ocr"]
+
+
+class OCRConfigurationError(RuntimeError):
+    """Raised when an image-only PDF needs OCR but the OCR runtime is absent."""
+
+
+@dataclass(frozen=True)
+class OCRLine:
+    top: float
+    text: str
+    height: float
+
+
+class TesseractOCR:
+    """Render PDF pages and recover positioned text with Tesseract.
+
+    Imports are intentionally delayed: born-digital PDFs can still be parsed
+    with their embedded text layer if OCR dependencies are not installed.
+    """
+
+    def __init__(self, path: str | Path) -> None:
+        try:
+            import pytesseract
+            from PIL import Image
+
+            # Fail at setup time with an actionable message, not after an
+            # ingestion has silently produced an empty tree.
+            pytesseract.get_tesseract_version()
+        except (ImportError, OSError, RuntimeError) as exc:
+            raise OCRConfigurationError(
+                "OCR requires the Tesseract executable. Install it with "
+                "'winget install -e --id UB-Mannheim.TesseractOCR', then restart the shell."
+            ) from exc
+        pdftoppm = shutil.which("pdftoppm")
+        if not pdftoppm:
+            raise OCRConfigurationError(
+                "OCR also requires Poppler's pdftoppm renderer. Install it with "
+                "'winget install -e --id oschwartz10612.Poppler', then restart the shell."
+            )
+        self._pytesseract = pytesseract
+        self._image_type = Image
+        self._path = str(path)
+        self._pdftoppm = pdftoppm
+
+    def line_records(self, page_number: int) -> list[OCRLine]:
+        # 300 DPI gives Tesseract enough detail for the small numbered headings.
+        # Poppler is used instead of PDFium/PyMuPDF because their native DLLs
+        # are blocked by Windows Application Control in this environment.
+        with tempfile.TemporaryDirectory() as temporary:
+            prefix = Path(temporary) / "page"
+            try:
+                subprocess.run(
+                    [
+                        self._pdftoppm,
+                        "-f",
+                        str(page_number + 1),
+                        "-l",
+                        str(page_number + 1),
+                        "-r",
+                        "300",
+                        "-png",
+                        self._path,
+                        str(prefix),
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            except (OSError, subprocess.CalledProcessError) as exc:
+                raise OCRConfigurationError(f"Could not render page {page_number + 1} for OCR: {exc}") from exc
+            image_path = next(Path(temporary).glob("page-*.png"), None)
+            if image_path is None:
+                raise OCRConfigurationError(f"Poppler did not produce an image for page {page_number + 1}")
+            with self._image_type.open(image_path) as image:
+                data = self._pytesseract.image_to_data(
+                    image,
+                    config="--oem 3 --psm 6",
+                    output_type=self._pytesseract.Output.DICT,
+                )
+        lines: dict[tuple[int, int, int], list[tuple[str, float, float]]] = defaultdict(list)
+        for index, word in enumerate(data["text"]):
+            if not word.strip():
+                continue
+            try:
+                confidence = float(data["conf"][index])
+            except (TypeError, ValueError):
+                confidence = -1
+            if confidence < 0:
+                continue
+            key = (data["block_num"][index], data["par_num"][index], data["line_num"][index])
+            lines[key].append((word.strip(), float(data["top"][index]), float(data["height"][index])))
+
+        records = [
+            OCRLine(
+                top=min(top for _, top, _ in words),
+                text=" ".join(word for word, _, _ in words),
+                height=max(height for _, _, height in words),
+            )
+            for words in lines.values()
+        ]
+        return sorted(records, key=lambda record: record.top)
 
 
 @dataclass
@@ -116,6 +219,39 @@ def _heading(line: str, is_bold: bool) -> tuple[str, str, int] | None:
     return number, match.group("title"), len(number.split("."))
 
 
+def _ocr_heading(line: str, line_height: float, median_height: float) -> tuple[str, str, int] | None:
+    """CT-200 OCR heading rule when PDF font metadata is unavailable.
+
+    Tesseract does not report bold font information. CT-200 headings are
+    numbered and visually prominent, while the numbered clinical list uses a
+    colon after its label. This conservative rule is only used for OCR pages.
+    """
+    match = HEADING_RE.match(line)
+    if not match or ":" in match.group("title"):
+        return None
+    # Main headings are larger than prose. Subheadings share body size in this
+    # manual, so their dotted numbering remains an additional CT-200 signal.
+    number = match.group("number").rstrip(".")
+    is_dotted_section = "." in number
+    is_large_top_level = line_height >= median_height * 1.12
+    if not (is_dotted_section or is_large_top_level):
+        return None
+    return number, match.group("title"), len(number.split("."))
+
+
+def _ocr_cover_title(lines: list[OCRLine]) -> str:
+    """Use pre-heading lines as a best-effort title for an image-only cover."""
+    if not lines:
+        return ""
+    typical_height = median(line.height for line in lines)
+    title_lines: list[str] = []
+    for line in lines:
+        if _ocr_heading(line.text, line.height, typical_height):
+            break
+        title_lines.append(line.text)
+    return " ".join(title_lines)
+
+
 def _real_tables(page: pdfplumber.page.Page) -> list[tuple[tuple[float, float, float, float], list[list[str | None]]]]:
     """Keep only the largest cell-boundary table in each overlapping region."""
     candidates = []
@@ -154,22 +290,47 @@ def _append_body_line(node: ParsedNode, line: str) -> None:
         node.blocks.append(ContentBlock("text", text=line))
 
 
-def parse_ct200_pdf(path: str | Path) -> ParsedDocument:
-    """Reconstruct the numbered CT-200 tree without normalizing anomalies."""
+def parse_ct200_pdf(path: str | Path, extraction_mode: ExtractionMode = "auto") -> ParsedDocument:
+    """Reconstruct the CT-200 tree using native text, OCR, or automatic choice.
+
+    ``auto`` uses the PDF text layer when present and OCR for image-only pages.
+    ``ocr`` forces Tesseract for every page, which is useful for validating the
+    OCR path against the supplied manual. ``native`` requires embedded text.
+    """
+    if extraction_mode not in {"auto", "native", "ocr"}:
+        raise ValueError("extraction_mode must be one of: auto, native, ocr")
     roots: list[ParsedNode] = []
     stack: list[ParsedNode] = []
     current: ParsedNode | None = None
     sequence = 0
     title = ""
+    ocr: TesseractOCR | None = None
 
     with pdfplumber.open(path) as pdf:
         for page_number, page in enumerate(pdf.pages):
-            if page_number == 0:
-                title = _cover_title(page)
+            native_lines = _line_records(page)
+            use_ocr = extraction_mode == "ocr" or (extraction_mode == "auto" and not native_lines)
+            if extraction_mode == "native" and not native_lines:
+                raise OCRConfigurationError(
+                    f"Page {page_number + 1} has no embedded text. Use extraction_mode='auto' or 'ocr'."
+                )
+            if use_ocr:
+                if ocr is None:
+                    ocr = TesseractOCR(path)
+                ocr_lines = ocr.line_records(page_number)
+                lines = [(line.top, line.text, line.height) for line in ocr_lines]
+                typical_height = median(line.height for line in ocr_lines) if ocr_lines else 1.0
+                if page_number == 0:
+                    title = _ocr_cover_title(ocr_lines)
+            else:
+                lines = [(top, line, is_bold) for top, line, is_bold in native_lines]
+                typical_height = 0.0
+                if page_number == 0:
+                    title = _cover_title(page)
             tables = _real_tables(page)
             pending_tables = sorted(tables, key=lambda item: item[0][1])
             inserted: set[int] = set()
-            for top, line, is_bold in _line_records(page):
+            for top, line, line_height in lines:
                 # A table can be followed immediately by a heading; flush it
                 # before changing the current section in that case.
                 if current:
@@ -177,7 +338,7 @@ def parse_ct200_pdf(path: str | Path) -> ParsedDocument:
                         if index not in inserted and top > bbox[3] + 1:
                             current.blocks.append(ContentBlock("table", cells=cells))
                             inserted.add(index)
-                detected = _heading(line, is_bold)
+                detected = _ocr_heading(line, line_height, typical_height) if use_ocr else _heading(line, bool(line_height))
                 if detected:
                     number, heading_title, level = detected
                     sequence += 1

@@ -20,9 +20,11 @@
   assert the known real table and the parser keeps no schema for regions
   without cell evidence. A production system should retain page-region
   provenance and send low-confidence layouts to review.
-- **Known unhandled input:** image-only/scanned pages are not handled. The
-  parser fails at extraction rather than silently pretending OCR text is
-  authoritative; CT-200's supplied PDFs do not need OCR.
+- **OCR fallback:** image-only/scanned pages use Tesseract OCR when it is
+  installed. The parser fails with an actionable setup error, rather than an
+  empty tree, if OCR is required but Tesseract is unavailable. OCR heading
+  detection is necessarily lower confidence because font-weight metadata is
+  not present in OCR output; low-quality scans should be reviewed.
 
 ## 2026-07-16 — version identity
 
@@ -41,13 +43,26 @@
 
 ## 2026-07-16 — generated output and staleness
 
-- **Generated-output store:** I chose a local JSON document store over MongoDB
-  because output is a small nested document collection accessed by ID in this
-  single-user assignment. It is explicitly not suitable for concurrent or
-  multi-instance production use; MongoDB is the first operational upgrade.
+- **Generated-output store:** MongoDB stores generated output because each
+  result is a nested document retrieved by selection or source node. Indexed
+  fields support those retrieval paths while SQLite continues to own the
+  versioned relational tree. Production work would add backups, monitoring,
+  and managed-secret handling.
 - **Invalid LLM output:** The API makes one repair retry with Pydantic's
   validation error. It then stores `generation_failed`, raw responses, and an
   error; it never invents a fallback case.
 - **Staleness:** Hash change is deliberately conservative. It cannot say
   whether a wording edit is clinically material, so either wording or a
   changed threshold makes a result stale and requires review.
+
+## 2026-07-16 — coverage correction
+
+- **Regression-first correction:** A pair of commits records tests that first
+  failed because the cover title was omitted and the clinical classification
+  list was flattened, followed by the parser/persistence fix. This is genuine
+  current debugging history, not a reconstructed claim about an earlier
+  parser version.
+- **Live provider verification:** Integration tests use deterministic LLM
+  doubles to be repeatable. A separate opt-in smoke script runs against the
+  configured real provider when credentials are supplied; it is intentionally
+  not run without user authorization or an API key.

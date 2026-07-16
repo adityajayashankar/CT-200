@@ -2,5 +2,8 @@ fastapi==0.115.0
 pydantic==2.13.4
 SQLAlchemy==2.0.51
 pdfplumber==0.11.10
+pymongo==4.13.2
+pytesseract==0.3.13
 httpx==0.28.1
+python-dotenv==1.1.1
 uvicorn[standard]==0.30.6

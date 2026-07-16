@@ -1,139 +1,264 @@
-# CT-200 approach
+# CT-200 Document Intelligence System: Approach
 
-## Scope and extraction
+## 1. What this project does
 
-This is a CT-200-specific backend, not a generic PDF parser. Manual
-inspection established that the supplied six-page v1 and seven-page v2 PDFs
-are born-digital. I therefore use `pdfplumber` word coordinates, fonts, and
-cell-boundary detection; OCR is neither needed nor used. The original brief
-prefers PyMuPDF for born-digital text, but PyMuPDF's native extension is
-blocked by Windows Application Control in this workspace. `pdfplumber`
-provides the layout evidence needed here without that blocked extension.
+The CT-200 manual is a PDF for a fictional home blood-pressure monitor. This
+project turns that manual into a structured, searchable tree of sections. A
+user can select one or more sections and ask an LLM to suggest QA test cases
+based on the selected text.
 
-Headings require both a CT-200 numbering label and bold styling. Number
-segments produce `nominal_level`, while `depth` is calculated from the actual
-parent chain. This keeps an authoring gap visible without making downstream
-tree consumers mistake it for a depth. The stack builder preserves visual
-document order rather than sorting numbers; body lines remain with the open
-node over a page boundary. Cell-bounded grids become `table` blocks. There
-were no confirmed tab-aligned non-tables, but the parsing model has a
-`tabular_text` block type so such content would not be falsely normalized as
-a table.
+The important part is traceability. A generated test case remains connected to
+the exact section text and document version that produced it. If the manual is
+uploaded again with changed text, the system can tell the user that the older
+test case needs review.
 
-## Structural inconsistencies (copied from inspection notes)
+The flow is:
 
-The skipped `2.1.1.1` level, visually out-of-order 3.4/3.3 siblings,
-duplicate `Error Codes`, continuing page-boundary body text, and table
-detector fragments are all structural inconsistencies with tests in the
-parsing slice. The system preserves the document's supplied order and level
-metadata, flags skipped parents through the missing relationship rather than
-inventing content, and only makes table claims where cell boundaries support
-them.
+```text
+CT-200 PDF
+  -> extract text, headings, lists, and tables
+  -> build and save a section tree
+  -> select version-pinned sections
+  -> generate validated QA ideas with an LLM
+  -> re-ingest a new manual version
+  -> show whether earlier generated ideas are stale
+```
 
-The raw text was also searched to confirm that `2.1.1` does not exist as a
-separate heading: its only occurrence is the `2.1.1.1` prefix. That node is
-attached to 2.1, has `nominal_level=4`, `depth=3`, and `numbering_gap=true`.
+This is intentionally a parser for the supplied CT-200 manuals, not a
+generic solution for every possible PDF.
 
-## Data model
+## 2. Reading and parsing the PDF
 
-SQLite owns relational, versioned data:
+### Chosen approach
 
-| Entity | Purpose |
+The extraction pipeline is hybrid. It first checks whether each PDF page has
+an embedded text layer. For born-digital pages it uses `pdfplumber`, which
+provides word positions, fonts, and table cell boundaries. For image-only or
+scanned pages it renders the page at 300 DPI with Poppler and uses Tesseract
+OCR to recover positioned text. This avoids needlessly OCRing clean digital
+text while still supporting the OCR input path required by the assignment.
+
+The assignment suggests PyMuPDF for born-digital PDFs, but its native
+extension was blocked by Windows Application Control in this environment.
+`pdfplumber` provides the layout evidence needed here instead.
+
+For every page, the parser produces positioned lines. Native pages include
+font information; OCR pages use Tesseract's word boxes and confidence values.
+The parser groups them into visual lines, then decides whether each line is a
+heading or body content.
+
+### How the hierarchy is built
+
+A line becomes a section heading only when both of these are true:
+
+1. It starts with CT-200-style numbering, such as `3.2` or `2.1.1.1`.
+2. It is bold in the PDF.
+
+This rule matters because the manual also contains numbered list items. A
+number alone is not enough to prove that text is a heading.
+
+The parser uses a stack of currently open headings. When it sees a new
+heading, it removes headings at the same or deeper numbered level, then adds
+the new heading below the closest real heading still open. Normal body text
+is attached to the current heading, even if it continues on the next page.
+The parser preserves the order seen in the PDF instead of sorting section
+numbers into an idealised order.
+
+Each saved node has both `nominal_level` and `depth`:
+
+- `nominal_level` is the number of parts in the visible label. For example,
+  `2.1.1.1` has nominal level 4.
+- `depth` is its real depth in the extracted tree.
+
+Keeping these separate prevents a bad section number from silently becoming a
+bad parent-child relationship.
+
+### Tables, lists, and document title
+
+The parser stores body content as typed blocks instead of flattening all text
+into one string:
+
+- Normal prose is a `text` block.
+- Numbered clinical classifications are a `list` block.
+- A grid is a `table` block only when `pdfplumber` detects cell boundaries.
+
+When table detection returns overlapping fragments, the parser keeps the
+largest cell-bounded table and discards contained fragments. The cover title
+is stored as document metadata rather than being lost before the first
+numbered heading.
+
+## 3. CT-200 irregularities and how they are handled
+
+The PDF was inspected manually before writing the final extraction logic. The
+following table records the non-standard cases found in it.
+
+| Finding in the manual | Handling in this project |
 | --- | --- |
-| `documents` | Stable CT-200 document identity. |
-| `document_versions` | Immutable ingestions with source path/hash and sequential version. |
-| `logical_nodes` | Identity that spans document versions. |
-| `nodes` | Per-version snapshots: actual parent snapshot, heading, numbering/depth metadata, blocks, body, and SHA-256 normalized-content hash. |
-| `selections` / `selection_items` | Named sets whose items point to snapshot `nodes`, explicitly pinning a version. |
+| The cover has a large title before section 1. | Save it as the document title. |
+| `2.1.1.1` appears without a separate `2.1.1` heading. | Attach it to the closest real parent (`2.1`), mark `numbering_gap=true`, and do not invent a missing section. |
+| Section 3 contains siblings in the visual order `3.1`, `3.2`, `3.4`, `3.3`. | Preserve the source order exactly. |
+| `Error Codes` appears twice under different parents. | Create two different nodes; the heading text is not treated as a globally unique ID. |
+| Text in section 3.1 continues across a page boundary. | Keep it in the open section until another heading is found. |
+| A specification grid is a real table, while detector output can also contain smaller fragments. | Keep the real cell-bounded table and remove contained fragments. |
+| The clinical classification content is a numbered list, including one wrapped final item. | Store it as five list entries, joining the continuation line to the final entry. |
 
-LLM generation records live in `generated_output.json`, a small document
-store separate from SQLite. MongoDB would add a local service and operational
-setup without benefiting this assignment's single-process, key-based access
-pattern. Each JSON document embeds the generated payload, raw LLM responses,
-failure reason, selection ID, exact source node IDs, logical IDs, document
-IDs, and source hashes. This keeps traceability separate and portable. For a
-multi-user production service I would replace it with MongoDB (or a durable
-object/document store) with locking, migrations, and backups.
+## 4. Debugging and validation
 
-## Version matching
+My first concern was not whether the result looked neat, but whether it could
+silently put text under the wrong section. I used manual inspection of the
+PDF, extracted-text checks, and focused automated tests to verify the tree.
 
-Matching is parent-aware normalized-heading matching. For a new parse,
-parents are processed first; a node keeps a prior logical ID only if exactly
-one prior node has the same matched actual parent logical ID and a
-case/whitespace-normalized heading. Numbering is not an identity key, because
-it is presentation metadata and `2.1.1.1` demonstrates it cannot define the
-actual tree. A matching logical node with a new content hash is a changed
-snapshot; an unmatched node gets a new logical node.
+The early parser logic exposed several weaknesses:
 
-This deliberately fails closed for two identical-title siblings under one
-parent: it creates a new logical node rather than guessing. Reordered repeated
-sibling headings and substantial heading renames are therefore the first
-known failure modes. The test suite deliberately exercises the duplicate
-sibling ambiguity. A future real `2.1.1` would make the Battery Life node
-re-parent, not silently remain matched through its nominal label.
+- Treating the numbering label as the actual tree depth would have created an
+  incorrect hierarchy for `2.1.1.1`.
+- Table detection produced nested fragments for a genuine table.
+- The cover title was omitted.
+- The wrapped final list item was flattened into normal text.
 
-## API and generation policy
+The fixes were to separate visible numbering from real depth, filter contained
+table regions, add explicit cover-title extraction, and preserve list blocks.
 
-FastAPI exposes ingestion, versioned top-level browsing, snapshot detail,
-search, per-logical-node diff summaries, selections, generation, and
-generation retrieval. All returned node IDs are per-version snapshots.
+The test suite includes explicit regression tests for duplicate headings,
+the skipped numbering level, out-of-order siblings, cross-page text, the
+real table, the cover title, and the numbered list. It also tests versioning,
+LLM retry behaviour, and the complete v1-to-v2 stale-generation flow.
 
-The generation prompt includes only selected node text and its snapshot IDs,
-asks for three to five executable QA ideas, and requires source IDs in every
-idea. Pydantic validates title, rationale, preconditions, steps, expected
-result, source IDs, and the 3–5 count. Invalid JSON, an incomplete schema, or
-an ID outside the selection receives one bounded repair attempt whose prompt
-contains the validation error. A second invalid result or provider failure is
-persisted as `generation_failed`, retaining raw responses/error rather than
-fabricating output.
+## 5. Data model and storage choices
 
-Generation is idempotent by a fingerprint of selection ID plus its sorted
-snapshot node IDs/content hashes. A repeat request returns the prior record;
-`force_regenerate=true` creates a new record. This avoids paid duplicate LLM
-calls while still allowing intentional fresh ideas.
+SQLite stores the structured, relational data. MongoDB stores LLM generation
+records. This follows the assignment's requested split: relational data is
+kept in SQLite while nested generated test-case documents are kept in a
+document database.
 
-## Staleness and its limits
+| Data | Where it is stored | Why |
+| --- | --- | --- |
+| Document identity and title | `documents` table | One stable record for CT-200. |
+| Each uploaded manual | `document_versions` table | Version 1 and version 2 both remain available. |
+| Cross-version section identity | `logical_nodes` table | Links the same conceptual section between versions. |
+| Extracted section snapshot | `nodes` table | Stores parent, heading, text, typed blocks, position, and content hash for one version. |
+| Named user selection | `selections` and `selection_items` tables | Stores exact node snapshots, so the selection is version-pinned. |
+| LLM result | MongoDB `generations` collection | Fits nested test-case documents and supports indexed retrieval by selection and source node. |
 
-At retrieval, every stored `(logical node, document, content hash)` is
-compared with the latest snapshot for that logical node. A changed hash or a
-missing latest snapshot marks the record stale and exposes a human-readable
-reason. The API does not auto-regenerate stale cases.
+Each MongoDB generation document stores the selection ID, source node IDs, logical node
+IDs, document IDs, source content hashes, raw LLM responses, status, and any
+error. That information makes a generated result traceable and auditable.
 
-Hash comparison treats a one-word edit exactly like a changed clinical
-threshold. That is conservative and acceptable for this small regulated
-document exercise: it produces review work, not an unsafe false-fresh result.
-With more time, numeric/clinical-entity extraction and severity-ranked diffs
-could prioritize threshold changes while retaining the hash as the audit
-baseline.
+## 6. Versioning and matching sections between manuals
 
-## What failed or remains unsupported
+Re-ingesting a PDF does not overwrite the old version. It creates a new set
+of immutable node snapshots.
 
-The initial parser would have conflated nominal numbering with tree depth; the
-explicit `nominal_level`/`depth` split fixes that. Initial table detection also
-returned nested fragments of genuine tables, so the parser keeps only the
-largest containing cell-bounded region. Image-only/scanned PDFs and figures
-are not handled; this parser would need an explicit OCR/figure pipeline before
-claiming support. The supplied PDFs contain no figures/captions.
+To decide whether a new section is the same logical section as one in the
+previous version, the matcher uses:
 
-## Decision log
+1. The already-matched logical identity of the actual parent.
+2. A case-insensitive, whitespace-normalised heading.
+3. Exactly one matching candidate under that parent.
 
-1. **Most likely silent wrong result:** a layout/extraction change may make a
-   text list or table-detector fragment look like a valid table. Known tables,
-   duplicate headings, skipped levels, ordering, and page-boundary flow have
-   targeted tests; a production implementation should retain page-region
-   provenance and route low-confidence layouts to human review.
-2. **Simplicity over correctness:** the JSON generated-output store is simple
-   and sufficient for this local assignment, but it would break first under
-   concurrent writers, multi-instance deployment, or operational backup and
-   audit requirements. MongoDB/document storage with transactional controls is
-   the next upgrade.
-3. **Unhandled input:** genuinely scanned/image-only PDFs are unsupported.
-   The system does not silently invent OCR text; parsing fails until an OCR
-   pipeline with review controls is added.
+Section numbering is deliberately not the identity key. It is presentation
+information, and the missing `2.1.1` level shows that the numbers cannot
+always be trusted to represent the real hierarchy.
 
-## With more time
+If one unique parent-and-heading match exists, the new snapshot keeps the old
+logical node ID. A different SHA-256 hash of its normalised body text means
+the content changed. If no safe match exists, a new logical node is created.
 
-I would add provenance coordinates to every body block, an explicit
-low-confidence/unsupported parse result, semantic similarity proposals for
-renamed nodes reviewed by a user, MongoDB-backed generation records, and
-severity-aware clinical-number diffs.
+This matcher deliberately fails safely for duplicate sibling headings. If two
+old siblings have the same normalised heading under the same parent, it does
+not guess which one matches the new node. It creates a new logical node
+instead. This can create false "new" nodes, but it avoids silently connecting
+history to the wrong section.
+
+Known limits are reordered repeated sibling headings and substantial heading
+renames. A future version containing a real `2.1.1` heading would re-parent
+the existing Battery Life section instead of incorrectly preserving the old
+path.
+
+## 7. APIs, selections, and generated QA ideas
+
+The FastAPI service provides endpoints to ingest a document, browse top-level
+sections by version, read one node and its children, search headings/body
+text, view a node's change summary, create selections, generate QA ideas, and
+retrieve past generations.
+
+A selection stores node snapshot IDs, not just the latest logical node IDs.
+For example, a selection created from section 3.2 in version 1 still points
+to the version 1 wording after version 2 is ingested. This is the foundation
+of reliable traceability.
+
+For generation, the prompt includes only the selected section text and its
+snapshot IDs. It asks for exactly three to five concrete test-case ideas in
+JSON. Every idea must have a title, rationale, preconditions, steps, expected
+result, and one or more source node IDs from the selection. The prompt also
+instructs the model not to invent clinical claims beyond the manual.
+
+Pydantic validates the response. If JSON is invalid, the schema is incomplete,
+or a test case cites an unselected node, the service sends one repair request
+that includes the validation error. If the retry still fails, or the provider
+fails, the result is saved as `generation_failed` with raw responses and the
+error. The system never fabricates test cases to make a failed request look
+successful.
+
+The same selection and unchanged source content return the earlier generation
+instead of calling the LLM again. This idempotency rule avoids accidental
+duplicate provider cost. `force_regenerate=true` is available when a user
+intentionally wants a fresh result.
+
+## 8. Staleness / impact detection
+
+Each generation saves the content hash of every source node. When a user later
+retrieves it, the service finds the latest snapshot for each logical node and
+compares hashes.
+
+- If a source node is missing in the latest version, the generation is stale.
+- If its current hash differs from the saved hash, the generation is stale.
+- The retrieval response includes readable reasons, such as `3.2 Cuff
+  Inflation Sequence content changed`.
+
+The node changes endpoint also returns a short unified text diff when a node
+has changed across versions.
+
+This is intentionally conservative: a spelling change and a changed safety
+threshold both mark the result stale. The system cannot safely infer that a
+small text change is unimportant in a medical-device manual. It asks for
+human review rather than claiming the generated test remains valid. It does
+not auto-regenerate stale test cases because that is outside the assignment
+scope.
+
+## 9. Decision log
+
+### What is most likely to silently give wrong results?
+
+PDF layout extraction is the highest risk. A layout change could make a list
+or a table-detector fragment look valid while placing content in the wrong
+structure. The focused parser tests catch known cases. In a production system,
+I would also store page coordinates for every block, assign extraction
+confidence, and send uncertain layouts to a human reviewer.
+
+### Where did I choose simplicity over production-level correctness?
+
+I use SQLite for the document tree and MongoDB for nested LLM generation
+records. The remaining simplification is running both with local development
+defaults rather than production backups, monitoring, and access controls.
+The first production gaps would be backup/restore policy, secret management,
+and operational monitoring rather than the generation-record data model.
+
+### What input is not handled?
+
+OCR is supported for image-only or scanned text pages when Tesseract is
+installed. OCR cannot reliably provide font-weight metadata, so scanned-page
+heading detection uses CT-200-specific numbering, text size, and list-label
+rules; low-quality scans still need review. Figures and captions are not
+extracted because the supplied CT-200 manuals do not contain them.
+
+## 10. What I would improve with more time
+
+- Add page-coordinate provenance to every text, list, and table block.
+- Return explicit per-block OCR confidence and a low-confidence parsing
+  result, rather than relying only on extraction behaviour.
+- Suggest possible matches for renamed headings, but require user review
+  before linking their version history.
+- Add MongoDB backups, monitoring, and a managed secret store for production.
+- Highlight changes to clinical numbers and thresholds separately from simple
+  wording changes, while retaining hash comparison as the audit baseline.
