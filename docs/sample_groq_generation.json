@@ -1,0 +1,69 @@
+{
+  "id": "1aeb881b-a492-44a7-92cc-1f2cf13ee6a7",
+  "selection_id": "95a744ed-6eae-4a5d-9c0e-653436dcb8b3",
+  "fingerprint": "058a0c28b2bb0a2a26919f08c01609ddf9f720c501e398b6a19629bf93eed6bb",
+  "status": "completed",
+  "test_cases": [
+    {
+      "title": "Cuff Inflation to Initial Target",
+      "rationale": "Verify cuff inflates to initial target of 180 mmHg on measurement start",
+      "preconditions": [
+        "Device is turned on",
+        "Cuff is properly connected"
+      ],
+      "steps": [
+        "Start a measurement"
+      ],
+      "expected_result": "Cuff inflates to 180 mmHg",
+      "source_node_ids": [
+        "8503dba3-cab9-4869-9854-c2183ed39899"
+      ]
+    },
+    {
+      "title": "Cuff Inflation Beyond Initial Target",
+      "rationale": "Verify cuff inflates in 40 mmHg increments up to 299 mmHg if pulse not detected",
+      "preconditions": [
+        "Device is turned on",
+        "Cuff is properly connected",
+        "User's pulse is not detectable at 180 mmHg"
+      ],
+      "steps": [
+        "Start a measurement",
+        "Ensure pulse is not detected by device at 180 mmHg"
+      ],
+      "expected_result": "Cuff inflates to 299 mmHg in 40 mmHg increments",
+      "source_node_ids": [
+        "8503dba3-cab9-4869-9854-c2183ed39899"
+      ]
+    },
+    {
+      "title": "Cuff Deflation",
+      "rationale": "Verify cuff deflates in controlled steps of approximately 3 mmHg",
+      "preconditions": [
+        "Device is turned on",
+        "Cuff is properly connected",
+        "Measurement is in progress"
+      ],
+      "steps": [
+        "Allow device to start deflation after inflation"
+      ],
+      "expected_result": "Cuff deflates in steps of approximately 3 mmHg",
+      "source_node_ids": [
+        "8503dba3-cab9-4869-9854-c2183ed39899"
+      ]
+    }
+  ],
+  "raw_responses": [
+    "{\"test_cases\":[\n  {\n    \"title\": \"Cuff Inflation to Initial Target\",\n    \"rationale\": \"Verify cuff inflates to initial target of 180 mmHg on measurement start\",\n    \"preconditions\": [\"Device is turned on\", \"Cuff is properly connected\"],\n    \"steps\": [\"Start a measurement\"],\n    \"expected_result\": \"Cuff inflates to 180 mmHg\",\n    \"source_node_ids\": [\"8503dba3-cab9-4869-9854-c2183ed39899\"]\n  },\n  {\n    \"title\": \"Cuff Inflation Beyond Initial Target\",\n    \"rationale\": \"Verify cuff inflates in 40 mmHg increments up to 299 mmHg if pulse not detected\",\n    \"preconditions\": [\"Device is turned on\", \"Cuff is properly connected\", \"User's pulse is not detectable at 180 mmHg\"],\n    \"steps\": [\"Start a measurement\", \"Ensure pulse is not detected by device at 180 mmHg\"],\n    \"expected_result\": \"Cuff inflates to 299 mmHg in 40 mmHg increments\",\n    \"source_node_ids\": [\"8503dba3-cab9-4869-9854-c2183ed39899\"]\n  },\n  {\n    \"title\": \"Cuff Deflation\",\n    \"rationale\": \"Verify cuff deflates in controlled steps of approximately 3 mmHg\",\n    \"preconditions\": [\"Device is turned on\", \"Cuff is properly connected\", \"Measurement is in progress\"],\n    \"steps\": [\"Allow device to start deflation after inflation\"],\n    \"expected_result\": \"Cuff deflates in steps of approximately 3 mmHg\",\n    \"source_node_ids\": [\"8503dba3-cab9-4869-9854-c2183ed39899\"]\n  }\n]}"
+  ],
+  "error": null,
+  "node_snapshots": [
+    {
+      "node_id": "8503dba3-cab9-4869-9854-c2183ed39899",
+      "logical_node_id": "d02ba5bc-a4b9-4066-9473-db46e643bf4e",
+      "document_id": "72bd96c0-84f3-4f3b-8437-f25c71167b4c",
+      "content_hash": "a1f73152526532cf4692d15ffc9516518dceea83d6ae73a8ed153ea6e946fa1f"
+    }
+  ],
+  "created_at": "2026-07-16T21:52:32.490702+00:00"
+}

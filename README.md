@@ -72,6 +72,41 @@ Without an API key/model, a generation request is recorded as
 `generation_failed` with the configuration error preserved; it is not silently
 replaced with invented test cases.
 
+## Verify the complete flow
+
+Use the interactive API at `http://127.0.0.1:8000/docs`. The PDF tree and
+selections are stored in SQLite; MongoDB stores only the generated QA output
+and its traceability metadata.
+
+1. Call `POST /documents/ct200/ingest` with:
+
+   ```json
+   {"source_path": "C:/Users/adity/CT-200/data/ct200_manual.pdf"}
+   ```
+
+2. Call `GET /documents/ct200/sections`. It should return the eight top-level
+   CT-200 sections.
+3. Call `GET /nodes/search?document_name=ct200&query=Cuff%20Inflation` and
+   copy the returned node ID for section 3.2.
+4. Call `POST /selections` with that node ID, then use the returned selection
+   ID in `POST /selections/{selection_id}/generations` with body `{}`.
+
+A successful generation returns `status: "completed"`, three to five
+structured test cases, and `stale: false`. In MongoDB Atlas, refresh
+`ct200.generations` to see the corresponding document. It contains the
+application generation ID, selection ID, test cases, raw LLM response, source
+node snapshots, hashes, and timestamp. MongoDB's `_id` is its own internal
+document ID; it is different from the application's `id` field.
+
+See [sample_groq_generation.json](docs/sample_groq_generation.json) for an
+actual completed Groq response exported from MongoDB. It contains no API key
+or database credentials.
+
+If a generation initially failed before LLM credentials were configured,
+restart the server after updating `.env` and send
+`{"force_regenerate": true}` to create a new LLM request instead of returning
+the saved failure.
+
 ## v1 → v2 flow
 
 Ingest v1, use the returned snapshot node IDs to create a selection and

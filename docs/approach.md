@@ -144,6 +144,12 @@ Each MongoDB generation document stores the selection ID, source node IDs, logic
 IDs, document IDs, source content hashes, raw LLM responses, status, and any
 error. That information makes a generated result traceable and auditable.
 
+The runtime flow was verified with the supplied CT-200 manual: ingestion
+returned all eight top-level sections, a selection was created for section 3.2
+(`Cuff Inflation Sequence`), and a real provider returned three validated test
+cases. The completed generation document appeared in the MongoDB `ct200`
+database's `generations` collection with its source snapshot and content hash.
+
 ## 6. Versioning and matching sections between manuals
 
 Re-ingesting a PDF does not overwrite the old version. It creates a new set
