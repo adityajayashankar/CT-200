@@ -15,13 +15,15 @@ import pdfplumber
 
 
 HEADING_RE = re.compile(r"^(?P<number>\d+(?:\.\d+)*\.?)\s+(?P<title>.+)$")
+LIST_ITEM_RE = re.compile(r"^\d+\.\s+.+$")
 
 
 @dataclass
 class ContentBlock:
-    block_type: Literal["text", "table", "tabular_text"]
+    block_type: Literal["text", "list", "table", "tabular_text"]
     text: str = ""
     cells: list[list[str | None]] | None = None
+    items: list[str] | None = None
 
 
 @dataclass
@@ -42,6 +44,8 @@ class ParsedNode:
         for block in self.blocks:
             if block.block_type == "table" and block.cells:
                 parts.append("\n".join(" | ".join(cell or "" for cell in row) for row in block.cells))
+            elif block.block_type == "list" and block.items:
+                parts.append("\n".join(block.items))
             else:
                 parts.append(block.text)
         return "\n".join(part for part in parts if part)
@@ -51,6 +55,7 @@ class ParsedNode:
 class ParsedDocument:
     source: str
     nodes: list[ParsedNode]
+    title: str = ""
 
     def flatten(self) -> list[ParsedNode]:
         result: list[ParsedNode] = []
@@ -82,6 +87,23 @@ def _line_records(page: pdfplumber.page.Page) -> list[tuple[float, str, bool]]:
         )
         for words_on_line in grouped
     ]
+
+
+def _cover_title(page: pdfplumber.page.Page) -> str:
+    """Extract the cover's large-font title, excluding the first section heading."""
+    words = page.extract_words(extra_attrs=["fontname", "size"], use_text_flow=True)
+    grouped: list[list[dict]] = []
+    for word in words:
+        if not grouped or abs(float(grouped[-1][0]["top"]) - float(word["top"])) > 1.0:
+            grouped.append([word])
+        else:
+            grouped[-1].append(word)
+    title_lines = [
+        " ".join(word["text"] for word in line)
+        for line in grouped
+        if float(line[0]["top"]) < 180 and all(float(word["size"]) >= 20 for word in line)
+    ]
+    return " ".join(title_lines)
 
 
 def _heading(line: str, is_bold: bool) -> tuple[str, str, int] | None:
@@ -117,15 +139,33 @@ def _in_table(top: float, tables: list[tuple[tuple[float, float, float, float], 
     return any(table_top - 1 <= top <= table_bottom + 1 for (_, table_top, _, table_bottom), _ in tables)
 
 
+def _append_body_line(node: ParsedNode, line: str) -> None:
+    if LIST_ITEM_RE.match(line):
+        if node.blocks and node.blocks[-1].block_type == "list":
+            node.blocks[-1].items = (node.blocks[-1].items or []) + [line]
+        else:
+            node.blocks.append(ContentBlock("list", items=[line]))
+    elif node.blocks and node.blocks[-1].block_type == "list":
+        # The final hypertensive-crisis item wraps onto a continuation line.
+        node.blocks[-1].items[-1] += " " + line
+    elif node.blocks and node.blocks[-1].block_type == "text":
+        node.blocks[-1].text += " " + line
+    else:
+        node.blocks.append(ContentBlock("text", text=line))
+
+
 def parse_ct200_pdf(path: str | Path) -> ParsedDocument:
     """Reconstruct the numbered CT-200 tree without normalizing anomalies."""
     roots: list[ParsedNode] = []
     stack: list[ParsedNode] = []
     current: ParsedNode | None = None
     sequence = 0
+    title = ""
 
     with pdfplumber.open(path) as pdf:
-        for page in pdf.pages:
+        for page_number, page in enumerate(pdf.pages):
+            if page_number == 0:
+                title = _cover_title(page)
             tables = _real_tables(page)
             pending_tables = sorted(tables, key=lambda item: item[0][1])
             inserted: set[int] = set()
@@ -139,7 +179,7 @@ def parse_ct200_pdf(path: str | Path) -> ParsedDocument:
                             inserted.add(index)
                 detected = _heading(line, is_bold)
                 if detected:
-                    number, title, level = detected
+                    number, heading_title, level = detected
                     sequence += 1
                     while stack and stack[-1].nominal_level >= level:
                         stack.pop()
@@ -153,7 +193,7 @@ def parse_ct200_pdf(path: str | Path) -> ParsedDocument:
                     node = ParsedNode(
                         f"parsed-{sequence}",
                         number,
-                        title,
+                        heading_title,
                         level,
                         depth,
                         numbering_gap,
@@ -170,12 +210,9 @@ def parse_ct200_pdf(path: str | Path) -> ParsedDocument:
                 if current is None:
                     continue  # cover title and pre-section whitespace
                 if not _in_table(top, pending_tables):
-                    if current.blocks and current.blocks[-1].block_type == "text":
-                        current.blocks[-1].text += " " + line
-                    else:
-                        current.blocks.append(ContentBlock("text", text=line))
+                    _append_body_line(current, line)
             if current:
                 for index, (_, cells) in enumerate(pending_tables):
                     if index not in inserted:
                         current.blocks.append(ContentBlock("table", cells=cells))
-    return ParsedDocument(str(path), roots)
+    return ParsedDocument(str(path), roots, title)

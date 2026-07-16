@@ -19,7 +19,10 @@ def normalized_hash(text: str) -> str:
 
 
 def _serialize_blocks(blocks: list[ContentBlock]) -> list[dict]:
-    return [{"block_type": block.block_type, "text": block.text, "cells": block.cells} for block in blocks]
+    return [
+        {"block_type": block.block_type, "text": block.text, "cells": block.cells, "items": block.items}
+        for block in blocks
+    ]
 
 
 def _latest_version(session: Session, document_id: str) -> DocumentVersion | None:
@@ -34,11 +37,14 @@ def ingest_pdf(session: Session, document_name: str, source_path: str | Path) ->
     """Persist a new immutable snapshot, retaining logical identity where safe."""
     source = Path(source_path)
     source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+    parsed = parse_ct200_pdf(source)
     document = session.scalar(select(Document).where(Document.name == document_name))
     if document is None:
-        document = Document(name=document_name)
+        document = Document(name=document_name, title=parsed.title)
         session.add(document)
         session.flush()
+    elif parsed.title:
+        document.title = parsed.title
     latest = _latest_version(session, document.id)
     if latest and latest.source_hash == source_hash:
         return latest
@@ -65,7 +71,6 @@ def ingest_pdf(session: Session, document_name: str, source_path: str | Path) ->
             for node in prior_nodes
         ]
 
-    parsed = parse_ct200_pdf(source)
     flattened = parsed.flatten()
     matches = match_nodes(
         prior,

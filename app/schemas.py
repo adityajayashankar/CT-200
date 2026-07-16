@@ -12,6 +12,7 @@ class IngestRequest(BaseModel):
 
 class IngestResponse(BaseModel):
     document_name: str
+    title: str
     version_id: str
     version_number: int
 

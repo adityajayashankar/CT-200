@@ -16,6 +16,7 @@ def test_reingestion_preserves_logical_ids_and_changed_hashes(tmp_path):
     Session = make_session_factory(f"sqlite:///{tmp_path / 'ct200.db'}")
     with Session() as session:
         first = ingest_pdf(session, "ct200", V1)
+        assert first.document.title == "CardioTrack CT-200 Home Blood Pressure Monitor — Technical & User Manual"
         v1_nodes = session.scalars(select(Node).where(Node.document_version_id == first.id)).all()
         first_battery = next(node for node in v1_nodes if node.number == "2.1.1.1")
 

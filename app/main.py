@@ -46,7 +46,12 @@ def create_app(database_url: str = "sqlite:///./ct200.db", output_path: str = "g
             raise HTTPException(422, f"Source PDF does not exist: {source}")
         with app.state.Session() as session:
             version = ingest_pdf(session, document_name, source)
-            return IngestResponse(document_name=document_name, version_id=version.id, version_number=version.version_number)
+            return IngestResponse(
+                document_name=document_name,
+                title=version.document.title,
+                version_id=version.id,
+                version_number=version.version_number,
+            )
 
     @app.get("/documents/{document_name}/sections", response_model=list[NodeSummary])
     def sections(document_name: str, version: int | None = None):
