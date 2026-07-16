@@ -29,7 +29,9 @@ class ParsedNode:
     uid: str
     number: str
     heading: str
-    level: int
+    nominal_level: int
+    depth: int
+    numbering_gap: bool
     parent_uid: str | None
     blocks: list[ContentBlock] = field(default_factory=list)
     children: list["ParsedNode"] = field(default_factory=list)
@@ -139,13 +141,24 @@ def parse_ct200_pdf(path: str | Path) -> ParsedDocument:
                 if detected:
                     number, title, level = detected
                     sequence += 1
-                    while stack and stack[-1].level >= level:
+                    while stack and stack[-1].nominal_level >= level:
                         stack.pop()
                     # A number can skip a level (2.1 -> 2.1.1.1).  It is
                     # attached to the closest real ancestor, never to an
                     # invented placeholder section.
                     parent = stack[-1] if stack else None
-                    node = ParsedNode(f"parsed-{sequence}", number, title, level, parent.uid if parent else None)
+                    depth = (parent.depth + 1) if parent else 1
+                    expected_parent_number = ".".join(number.split(".")[:-1])
+                    numbering_gap = bool(parent and parent.number != expected_parent_number)
+                    node = ParsedNode(
+                        f"parsed-{sequence}",
+                        number,
+                        title,
+                        level,
+                        depth,
+                        numbering_gap,
+                        parent.uid if parent else None,
+                    )
                     if parent:
                         parent.children.append(node)
                     else:

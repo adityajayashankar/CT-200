@@ -19,7 +19,9 @@ def test_duplicate_error_codes_have_distinct_identity_and_parents():
 
 def test_skipped_numbering_level_attaches_to_closest_real_ancestor():
     battery = next(node for node in nodes() if node.number == "2.1.1.1")
-    assert battery.level == 4
+    assert battery.nominal_level == 4
+    assert battery.depth == 3
+    assert battery.numbering_gap is True
     assert battery.parent_uid == "parsed-5"  # 2.1; no invented 2.1.1 node
 
 

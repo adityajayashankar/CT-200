@@ -21,6 +21,13 @@ no `2.1.1` node. The parser must retain level four and attach it to the
 closest actual ancestor (`2.1`) rather than manufacturing a heading that is
 not in the manual.
 
+I also searched the raw text extracted from every page, not only styled
+heading candidates. `2.1.1` occurs once, solely as the prefix of
+`2.1.1.1`; a separate intermediate heading is genuinely absent. For this
+case the parser records `nominal_level=4` (the label), `depth=3` (the actual
+parent chain), and `numbering_gap=true`. Structural operations use `depth`;
+the nominal label remains traceable rather than being silently normalized.
+
 Numbering is not presentation order: page 3 prints `3.4 Auto Shutoff` before
 `3.3 Result Display and Classification`. These must be siblings in document
 order, not sorted into numerical order. Lists are numbered as well (the five
