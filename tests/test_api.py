@@ -77,6 +77,12 @@ def test_browse_selection_generation_and_staleness_flow(tmp_path):
     generated = client.get("/generations", params={"selection_id": selection["id"]}).json()
     assert generated[0]["stale"] is True
     assert "3.2 Cuff Inflation Sequence content changed" in generated[0]["stale_reasons"]
+    v2_cuff = next(
+        node
+        for node in client.get("/nodes/search", params={"document_name": "ct200", "query": "Cuff Inflation"}).json()
+        if node["number"] == "3.2"
+    )
+    assert client.get("/generations", params={"node_id": v2_cuff["id"]}).json()[0]["id"] == first["id"]
     assert client.get(f"/selections/{selection['id']}").json()["items"][0]["version_id"] == selection["items"][0]["version_id"]
 
 

@@ -38,3 +38,16 @@
   ambiguous case and creates a new logical node; a test covers this. This
   favors visible false-new nodes over silently assigning changed content to
   the wrong historical logical node.
+
+## 2026-07-16 — generated output and staleness
+
+- **Generated-output store:** I chose a local JSON document store over MongoDB
+  because output is a small nested document collection accessed by ID in this
+  single-user assignment. It is explicitly not suitable for concurrent or
+  multi-instance production use; MongoDB is the first operational upgrade.
+- **Invalid LLM output:** The API makes one repair retry with Pydantic's
+  validation error. It then stores `generation_failed`, raw responses, and an
+  error; it never invents a fallback case.
+- **Staleness:** Hash change is deliberately conservative. It cannot say
+  whether a wording edit is clinically material, so either wording or a
+  changed threshold makes a result stale and requires review.

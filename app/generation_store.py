@@ -54,3 +54,11 @@ class JsonGenerationStore:
                 for record in self._read()
                 if any(item["node_id"] == node_id for item in record["node_snapshots"])
             ]
+
+    def by_logical_node(self, logical_node_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            return [
+                record
+                for record in self._read()
+                if any(item["logical_node_id"] == logical_node_id for item in record["node_snapshots"])
+            ]

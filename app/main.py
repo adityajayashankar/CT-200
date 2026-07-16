@@ -123,7 +123,15 @@ def create_app(database_url: str = "sqlite:///./ct200.db", output_path: str = "g
         if (selection_id is None) == (node_id is None):
             raise HTTPException(422, "Supply exactly one of selection_id or node_id")
         with app.state.Session() as session:
-            records = app.state.store.by_selection(selection_id) if selection_id else app.state.store.by_node(node_id)
+            if selection_id:
+                records = app.state.store.by_selection(selection_id)
+            else:
+                node = session.get(Node, node_id)
+                if node is None:
+                    raise HTTPException(404, "Node not found")
+                # A current-version snapshot resolves records generated from
+                # older snapshots of the same logical requirement.
+                records = app.state.store.by_logical_node(node.logical_node_id)
             return [generation_response(session, record) for record in records]
 
     return app
