@@ -40,3 +40,16 @@ def test_genuine_specification_grid_is_preserved_as_a_table_block():
     specifications = next(node for node in nodes() if node.number == "2.1")
     table = next(block for block in specifications.blocks if block.block_type == "table")
     assert table.cells and table.cells[0] == ["Parameter", "Value"]
+
+
+def test_cover_title_is_retained_as_document_metadata():
+    parsed = parse_ct200_pdf(PDF)
+    assert parsed.title == "CardioTrack CT-200 Home Blood Pressure Monitor — Technical & User Manual"
+
+
+def test_numbered_classification_entries_are_a_structured_list_block():
+    classification = next(node for node in nodes() if node.number == "3.3")
+    list_block = next(block for block in classification.blocks if block.block_type == "list")
+    assert list_block.items and len(list_block.items) == 5
+    assert list_block.items[0].startswith("1. Normal:")
+    assert list_block.items[-1].endswith("recommends seeking immediate medical attention")
