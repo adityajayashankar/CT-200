@@ -1,3 +1,6 @@
+Exit code: 0
+Wall time: 0.2 seconds
+Output:
 # CT-200 Document Intelligence System: Approach
 
 ## 1. What this project does
@@ -113,8 +116,9 @@ The early parser logic exposed several weaknesses:
 - Treating the numbering label as the actual tree depth would have created an
   incorrect hierarchy for `2.1.1.1`.
 - Table detection produced nested fragments for a genuine table.
-- The cover title was omitted. Since it has no section number, the initial parser ignored it. The fix saves it separately as document metadata, rather than treating it as a section.
-- The wrapped final list item was flattened into normal text.(the list item 5)
+- The cover title was omitted because it has no section number.
+- The wrapped final list item was flattened into normal text instead of being
+  kept as list item 5.
 
 The fixes were to separate visible numbering from real depth, filter contained
 table regions, add explicit cover-title extraction, and preserve list blocks.

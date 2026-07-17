@@ -94,3 +94,19 @@ generation retrieval.
 The real LLM provider is tested separately through an opt-in smoke script.
 The regular test suite uses deterministic test doubles so it stays repeatable
 and does not require credentials or spend provider quota.
+
+## Short answers I would give in review
+
+**What is most likely to be wrong without raising an error?** PDF layout
+extraction. A list item or small table fragment can look structurally valid,
+so I use manual checks of the supplied PDFs and regression tests for the cases
+I found.
+
+**Where did I keep it simple?** Version matching. Parent plus normalised
+heading is easy to understand, but renamed headings and reordered duplicate
+siblings can become false new sections. In production, that would be the first
+area I would add reviewer-assisted matching to.
+
+**What input is not handled?** Figures and captions are not extracted as
+separate content. Selectable caption text may remain in body text, but the
+figure itself is not understood or represented.
