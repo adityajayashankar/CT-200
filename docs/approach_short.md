@@ -1,102 +1,122 @@
-Exit code: 0
-Wall time: 0.2 seconds
-Output:
-# CT-200 Document Intelligence System: approach
+# CT-200 Document Intelligence System: short approach
 
-## What it does
+## In one sentence
 
-The service turns the supplied CT-200 PDF into a searchable section tree. A
-user can select saved section snapshots and ask an LLM for three to five QA
-test ideas. The source text and document version remain attached to every
-generation, so later document changes can be identified.
+The system turns the supplied CT-200 PDF into a versioned section tree, then
+uses selected section text to generate traceable QA test ideas.
 
-This is intentionally built for the supplied CT-200 manuals, not as a general
-PDF understanding product.
+## End-to-end flow
 
-## Parsing the PDF
+```text
+PDF
+  → extract headings, text, lists, and tables
+  → save a versioned section tree
+  → select exact section snapshots
+  → generate and validate QA test ideas
+  → compare them with later PDF versions
+```
 
-The manuals are born-digital, so the normal path uses `pdfplumber` for text
-positions, font styling, and table cells. I used it instead of PyMuPDF because
-PyMuPDF's native extension was blocked by Windows Application Control in this
-workspace. Image-only pages fall back to Tesseract OCR at 300 DPI.
+## 1. Parse the PDF
 
-A heading must have both CT-200-style numbering and bold text. This prevents
-the numbered clinical-classification list from being mistaken for sections.
-The parser keeps a stack of open headings. New headings close headings at the
-same or deeper numbered level, then attach below the closest real parent still
-open. Body text stays with the current heading across page breaks. The order
-in the PDF is preserved; section numbers are not sorted.
+The supplied manuals have selectable text, so the parser normally uses
+`pdfplumber` for text position, bold styling, and table cells. Image-only
+pages use Tesseract OCR instead. `pdfplumber` was chosen because PyMuPDF could
+not run in this Windows environment.
 
-`nominal_level` and `depth` are kept separate. `2.1.1.1`, for example, has a
-four-part visible label but appears directly below `2.1`, with no real
-`2.1.1` parent. It is saved as `nominal_level=4`, `depth=3`, and
-`numbering_gap=true`. The parser does not invent missing headings.
+### How headings become a tree
 
-Content is saved as typed blocks: normal text, numbered lists, and tables.
-Only tables with cell boundaries are treated as tables; smaller detector
-fragments contained inside a real table are discarded. The unnumbered cover
-title is stored as document metadata.
+A line is a heading only if it is both:
 
-## Known CT-200 cases
+- CT-200-style numbered, such as `3.2` or `2.1.1.1`; and
+- bold in the PDF.
 
-| PDF case | Result |
-| --- | --- |
-| Cover title before section 1 | Saved as the document title. |
-| Missing `2.1.1` before `2.1.1.1` | Attached below `2.1`; gap flagged. |
-| `3.4` appears before `3.3` | Kept in that source order. |
-| Two `Error Codes` headings | Stored as separate nodes under their real parents. |
-| Text continues onto the next page | Kept in the open section. |
-| A list item wraps onto another line | Joined to the same list item. |
+This avoids turning the numbered clinical-classification list into sections.
+The parser keeps a stack of open headings. A new heading is added below the
+closest real parent that is still open. Text remains under the current heading
+until another heading is found, even when a page break occurs.
 
-## Storage and versioning
+The PDF's order is preserved. For example, `3.4` stays before `3.3` because
+that is how it appears in the manual.
 
-SQLite stores the document tree, versions, nodes, and user selections. Every
-ingestion creates immutable node snapshots; it does not overwrite the previous
-manual. MongoDB stores nested generation records.
+### Numbering is not the same as depth
 
-Nodes are matched between versions using the already-matched real parent and a
-case-insensitive, whitespace-normalised heading. Section numbers are not used
-as identity. If the match is ambiguous, for example duplicate sibling headings
-that were reordered, the system creates a new logical node rather than
-guessing.
+`nominal_level` is based on the visible number. `depth` is the actual position
+in the extracted tree.
 
-The API can list top-level sections, get one node with its children and full
-text, search headings/body text, and show a node's version history with a
-short diff.
+```text
+2.1 General Specifications          depth 2
+└── 2.1.1.1 Battery Life...          nominal level 4, depth 3
+```
 
-## LLM generation
+There is no real `2.1.1` heading in the PDF, so the parser does not invent
+one. It records `numbering_gap=true` instead.
 
-A selection stores node snapshot IDs, not just the latest logical IDs. The
-generation prompt receives only the selected body text and asks for three to
-five JSON test cases with title, rationale, preconditions, steps, expected
-result, and source node IDs.
+### Other extracted content
 
-Pydantic validates the response. Invalid JSON, missing fields, an invalid case
-count, or source IDs outside the selection trigger one repair request. If that
-also fails, the result is saved as `generation_failed` with the raw responses
-and error. The system does not fabricate a successful result.
+- Normal paragraphs become `text` blocks.
+- The clinical classification becomes a five-item `list` block.
+- A grid becomes a `table` block only when cell boundaries are detected.
+- Smaller table fragments inside a real table are discarded.
+- The unnumbered cover title is saved as document metadata.
 
-The same selection with unchanged source hashes returns the previous result to
-avoid duplicate provider calls. `force_regenerate=true` is available when a
-new result is wanted intentionally.
+## 2. Store and browse the result
 
-## Staleness and limits
+SQLite stores the document tree, versions, nodes, and selections. Every PDF
+ingestion creates a new set of immutable snapshots; it never overwrites the
+previous version. MongoDB stores the nested LLM generation records.
 
-Each generation saves the logical node IDs and body-text hashes of its source
-snapshots. At retrieval time, the service finds the latest snapshot for every
-logical node. A missing node or different hash makes the generation stale and
-returns a readable reason plus a short diff.
+The API supports:
 
-This is conservative: fixing a typo is treated the same as changing a pressure
-threshold. For this medical-device-style document, that is safer than silently
-approving an old test case. A production version should classify diffs for
-numbers, units, comparisons, and negation, then send uncertain cases for human
-review.
+- listing top-level sections for a version;
+- reading one node, its children, full text, and content hash;
+- searching headings and body text; and
+- viewing whether a node changed between versions, with a short diff.
 
-The main limitation is PDF layout. A new manual layout or poor scan could make
-a line, list, or table harder to classify correctly. Figures are not extracted
-as structured content. More time would go into block-level coordinates,
-confidence scores, and a human-review path for uncertain extraction or
-version matches.
+## 3. Match sections across versions
 
+The matcher uses the already-matched real parent plus a case-insensitive,
+whitespace-normalised heading. It does not use section number as an identity
+key, because the PDF itself has a numbering gap.
 
+If two possible matches are indistinguishable, the system creates a new
+logical node rather than guessing. This may over-report a new section, but it
+avoids connecting history to the wrong section.
+
+## 4. Generate QA ideas safely
+
+A user selection contains exact node snapshots, so a later PDF upload cannot
+silently change the text being sent to the LLM. The prompt receives only the
+selected text and requests three to five JSON test cases. Each case needs a
+title, rationale, preconditions, steps, expected result, and source node IDs.
+
+Pydantic validates the response. Invalid JSON, missing fields, a wrong number
+of cases, or unselected source IDs trigger one repair attempt. If it still
+fails, the system saves `generation_failed`, the raw responses, and the error.
+It does not make up a successful result.
+
+Submitting the same selection with unchanged text returns the earlier result
+instead of calling the LLM again. `force_regenerate=true` is available when a
+new result is deliberately needed.
+
+## 5. Flag stale generated results
+
+Each generation saves the source node IDs and body-text hashes. When it is
+retrieved later, the service compares those hashes with the latest matching
+node snapshots:
+
+- missing source node → stale;
+- changed source hash → stale; and
+- unchanged hash → still current.
+
+The response explains the reason and the node API can show a short text diff.
+This is deliberately conservative: a typo fix and a changed pressure
+threshold both mark a result stale. For this type of manual, asking for review
+is safer than automatically approving an older test case.
+
+## Limits
+
+The parser is tuned to the supplied CT-200 layout. A very different layout or
+a poor scan could make a heading, list, or table harder to classify. Figures
+are not extracted as structured content. With more time, I would add
+per-block coordinates and confidence scores, then flag uncertain extraction
+and version matches for manual review.
