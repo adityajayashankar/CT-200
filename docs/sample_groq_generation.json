@@ -1,4 +1,7 @@
 {
+  "_id": {
+    "$oid": "6a5952a0f706f2cfeac2b038"
+  },
   "id": "1aeb881b-a492-44a7-92cc-1f2cf13ee6a7",
   "selection_id": "95a744ed-6eae-4a5d-9c0e-653436dcb8b3",
   "fingerprint": "058a0c28b2bb0a2a26919f08c01609ddf9f720c501e398b6a19629bf93eed6bb",
