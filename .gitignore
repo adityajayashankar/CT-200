@@ -3,3 +3,4 @@ __pycache__/
 *.py[cod]
 ct200.db
 .env
+study.md
